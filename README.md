@@ -19,8 +19,7 @@
    - 轉機股
    - 穩定有護城河且股價合理
 10. 轉機/錯殺/護城河追蹤清單
-11. Google Trends：台灣/美國熱門搜尋、關鍵字搜尋熱度比較、相關搜尋/飆升搜尋
-12. 可選 AI 產業賽道、護城河、競爭對手與風險分析
+11. 可選 AI 產業賽道、護城河、競爭對手與風險分析
 
 ## 使用資料源
 
@@ -82,18 +81,6 @@ OPENAI_MODEL = "gpt-4o-mini"
 FINMIND_TOKEN 可選。OPENAI_API_KEY 可選。
 
 沒有 OPENAI_API_KEY 時，系統仍能運作，只是 AI 質化分析會改用規則版。
-
-## Google Trends 功能
-
-新增 `Google Trends` 分頁：
-
-- 台灣 / 美國熱門搜尋榜
-- 最多 5 個關鍵字的台灣 / 美國搜尋熱度比較
-- 單一關鍵字的 Top / Rising 相關搜尋
-
-注意：Google Trends 顯示的是相對搜尋熱度，不是實際搜尋量。100 代表所選地區與期間內最高熱度。
-
-目前使用 `pytrends` 這個非官方 Google Trends 套件；Google 若調整後端，資料可能暫時讀取失敗。
 
 ## 注意
 
