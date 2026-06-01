@@ -335,7 +335,7 @@ def tidy_statement(df: pd.DataFrame) -> pd.DataFrame:
         out["date"] = pd.to_datetime(out["date"])
     for col in out.columns:
         if col not in ["date", "stock_id", "type", "origin_name"]:
-            out[col] = pd.to_numeric(out[col], errors="ignore")
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     return out.sort_values("date") if "date" in out.columns else out
 
 
