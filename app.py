@@ -11,6 +11,11 @@ import requests
 import streamlit as st
 
 try:
+    from pytrends.request import TrendReq
+except Exception:
+    TrendReq = None
+
+try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
@@ -19,6 +24,88 @@ APP_TITLE = "台股錯殺・轉機・護城河估值系統"
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
+
+
+# -----------------------------
+# Google Trends helpers
+# -----------------------------
+
+GOOGLE_TRENDS_REGION_MAP = {
+    "台灣": {"geo": "TW", "pn": "taiwan", "hl": "zh-TW", "tz": 480},
+    "美國": {"geo": "US", "pn": "united_states", "hl": "en-US", "tz": -300},
+}
+
+
+def clean_keywords(raw: str, limit: int = 5) -> List[str]:
+    parts: List[str] = []
+    for chunk in raw.replace("，", ",").replace("\n", ",").split(","):
+        kw = chunk.strip()
+        if kw and kw not in parts:
+            parts.append(kw)
+    return parts[:limit]
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def trends_hot_searches(region_label: str) -> Tuple[pd.DataFrame, Optional[str]]:
+    if TrendReq is None:
+        return pd.DataFrame(), "尚未安裝 pytrends，請確認 requirements.txt 內有 pytrends。"
+    cfg = GOOGLE_TRENDS_REGION_MAP.get(region_label, GOOGLE_TRENDS_REGION_MAP["台灣"])
+    try:
+        pytrends = TrendReq(hl=cfg["hl"], tz=cfg["tz"], timeout=(10, 25), retries=1, backoff_factor=0.2)
+        df = pytrends.trending_searches(pn=cfg["pn"])
+        if df is None or df.empty:
+            return pd.DataFrame(), "Google Trends 目前沒有回傳熱門搜尋資料。"
+        out = df.reset_index(drop=True)
+        out.columns = ["熱門搜尋"]
+        out.insert(0, "排名", range(1, len(out) + 1))
+        return out, None
+    except Exception as e:
+        return pd.DataFrame(), f"Google Trends 熱門搜尋讀取失敗：{e}"
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def trends_interest_over_time(keywords: Tuple[str, ...], geo: str, timeframe: str, hl: str, tz: int) -> Tuple[pd.DataFrame, Optional[str]]:
+    if TrendReq is None:
+        return pd.DataFrame(), "尚未安裝 pytrends，請確認 requirements.txt 內有 pytrends。"
+    try:
+        kw_list = list(keywords)[:5]
+        if not kw_list:
+            return pd.DataFrame(), "請輸入至少一個關鍵字。"
+        pytrends = TrendReq(hl=hl, tz=tz, timeout=(10, 25), retries=1, backoff_factor=0.2)
+        pytrends.build_payload(kw_list, cat=0, timeframe=timeframe, geo=geo, gprop="")
+        df = pytrends.interest_over_time()
+        if df is None or df.empty:
+            return pd.DataFrame(), "Google Trends 沒有回傳時間序列資料，可能是搜尋量太低或暫時被限制。"
+        if "isPartial" in df.columns:
+            df = df.drop(columns=["isPartial"])
+        df = df.reset_index().rename(columns={"date": "日期"})
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), f"Google Trends 關鍵字趨勢讀取失敗：{e}"
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def trends_related_queries(keyword: str, geo: str, timeframe: str, hl: str, tz: int) -> Tuple[Dict[str, Any], Optional[str]]:
+    if TrendReq is None:
+        return {}, "尚未安裝 pytrends，請確認 requirements.txt 內有 pytrends。"
+    try:
+        pytrends = TrendReq(hl=hl, tz=tz, timeout=(10, 25), retries=1, backoff_factor=0.2)
+        pytrends.build_payload([keyword], cat=0, timeframe=timeframe, geo=geo, gprop="")
+        data = pytrends.related_queries()
+        return data or {}, None
+    except Exception as e:
+        return {}, f"Google Trends 相關搜尋讀取失敗：{e}"
+
+
+def plot_trends_interest(df: pd.DataFrame, title: str) -> go.Figure:
+    fig = go.Figure()
+    if df.empty or "日期" not in df.columns:
+        return fig
+    for col in df.columns:
+        if col != "日期":
+            fig.add_trace(go.Scatter(x=df["日期"], y=df[col], mode="lines+markers", name=col))
+    fig.update_layout(height=380, title=title, yaxis_title="搜尋熱度（0-100，相對值）", margin=dict(l=20, r=20, t=50, b=20))
+    return fig
 
 # -----------------------------
 # Helpers
@@ -609,7 +696,7 @@ st.metric("總分", f"{scores['總分']} / 100")
 st.dataframe(score_df, use_container_width=True, hide_index=True)
 
 # Tabs
-tabs = st.tabs(["估值與技術", "月營收", "法人籌碼", "財務體質", "AI/質化分析", "追蹤清單"])
+tabs = st.tabs(["估值與技術", "月營收", "法人籌碼", "財務體質", "Google Trends", "AI/質化分析", "追蹤清單"])
 
 with tabs[0]:
     if price.empty:
@@ -660,6 +747,95 @@ with tabs[3]:
     st.caption("財報欄位由公開資料轉換，部分公司欄位名稱可能不同；若顯示 —，代表需要人工核對財報科目。")
 
 with tabs[4]:
+    st.markdown("### 🔎 Google Trends：台灣 / 美國搜尋熱度")
+    st.caption("這裡用 Google Trends 相對搜尋熱度，不是實際搜尋次數。100 代表所選地區與期間內的最高熱度。")
+    st.info("Google Trends 適合看大眾關注度、題材熱度與品牌/產品聲量；不代表營收，也不等於股價會漲。")
+
+    trend_mode = st.radio("模式", ["熱門搜尋榜", "關鍵字比較", "相關搜尋"], horizontal=True)
+
+    if trend_mode == "熱門搜尋榜":
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            st.markdown("#### 台灣熱門搜尋")
+            tw_hot, tw_err = trends_hot_searches("台灣")
+            if tw_err:
+                st.warning(tw_err)
+            if not tw_hot.empty:
+                st.dataframe(tw_hot.head(25), use_container_width=True, hide_index=True)
+        with tc2:
+            st.markdown("#### 美國熱門搜尋")
+            us_hot, us_err = trends_hot_searches("美國")
+            if us_err:
+                st.warning(us_err)
+            if not us_hot.empty:
+                st.dataframe(us_hot.head(25), use_container_width=True, hide_index=True)
+
+    elif trend_mode == "關鍵字比較":
+        default_keywords = ", ".join([x for x in [name, stock_id, industry] if x and x != "未知產業"][:3])
+        raw_keywords = st.text_area("輸入最多 5 個關鍵字，用逗號或換行分隔", value=default_keywords or "台積電, AI伺服器, 半導體")
+        keywords = clean_keywords(raw_keywords)
+        timeframe_label = st.selectbox("時間範圍", ["過去 7 天", "過去 30 天", "過去 3 個月", "過去 12 個月", "過去 5 年"], index=3)
+        timeframe_map = {
+            "過去 7 天": "now 7-d",
+            "過去 30 天": "today 1-m",
+            "過去 3 個月": "today 3-m",
+            "過去 12 個月": "today 12-m",
+            "過去 5 年": "today 5-y",
+        }
+        timeframe = timeframe_map[timeframe_label]
+        if keywords:
+            tw_cfg = GOOGLE_TRENDS_REGION_MAP["台灣"]
+            us_cfg = GOOGLE_TRENDS_REGION_MAP["美國"]
+            tw_df, tw_err = trends_interest_over_time(tuple(keywords), tw_cfg["geo"], timeframe, tw_cfg["hl"], tw_cfg["tz"])
+            us_df, us_err = trends_interest_over_time(tuple(keywords), us_cfg["geo"], timeframe, us_cfg["hl"], us_cfg["tz"])
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                st.markdown("#### 台灣搜尋熱度")
+                if tw_err:
+                    st.warning(tw_err)
+                if not tw_df.empty:
+                    st.plotly_chart(plot_trends_interest(tw_df, "台灣 Google Trends"), use_container_width=True)
+                    st.dataframe(tw_df.tail(12), use_container_width=True, hide_index=True)
+            with tc2:
+                st.markdown("#### 美國搜尋熱度")
+                if us_err:
+                    st.warning(us_err)
+                if not us_df.empty:
+                    st.plotly_chart(plot_trends_interest(us_df, "美國 Google Trends"), use_container_width=True)
+                    st.dataframe(us_df.tail(12), use_container_width=True, hide_index=True)
+            st.caption("提醒：中文關鍵字在美國可能搜尋量偏低；美國市場建議輸入英文，例如 TSMC、Nvidia、AI server、semiconductor。")
+        else:
+            st.warning("請輸入至少一個關鍵字。")
+
+    else:
+        default_keyword = name if name and name != "未知公司" else "台積電"
+        keyword = st.text_input("關鍵字", value=default_keyword)
+        region_label = st.selectbox("地區", ["台灣", "美國"], index=0)
+        timeframe = st.selectbox("相關搜尋期間", ["today 12-m", "today 3-m", "today 1-m", "now 7-d", "today 5-y"], index=0)
+        cfg = GOOGLE_TRENDS_REGION_MAP[region_label]
+        if keyword:
+            rq, err = trends_related_queries(keyword, cfg["geo"], timeframe, cfg["hl"], cfg["tz"])
+            if err:
+                st.warning(err)
+            data = rq.get(keyword, {}) if isinstance(rq, dict) else {}
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                st.markdown("#### Top 相關搜尋")
+                top = data.get("top") if isinstance(data, dict) else None
+                if isinstance(top, pd.DataFrame) and not top.empty:
+                    st.dataframe(top, use_container_width=True, hide_index=True)
+                else:
+                    st.write("沒有資料。")
+            with rc2:
+                st.markdown("#### Rising 飆升搜尋")
+                rising = data.get("rising") if isinstance(data, dict) else None
+                if isinstance(rising, pd.DataFrame) and not rising.empty:
+                    st.dataframe(rising, use_container_width=True, hide_index=True)
+                else:
+                    st.write("沒有資料。")
+        st.caption("Rising 若顯示 breakout，代表相對成長非常高；但基期可能很低，要搭配新聞與成交量判讀。")
+
+with tabs[5]:
     ai_text = ai_industry_analysis(company, result, fs, latest_row(rev))
     if ai_text:
         st.markdown(ai_text)
@@ -667,7 +843,7 @@ with tabs[4]:
         st.markdown(rule_based_industry_text(company, result, fs))
         st.info("若在 Streamlit Secrets 加入 OPENAI_API_KEY，這裡會升級成 AI 產業/護城河/競爭對手分析。")
 
-with tabs[5]:
+with tabs[6]:
     st.markdown("### 轉機/錯殺/護城河追蹤清單")
     checklist = [
         "月營收 YoY 是否連續 3 個月改善",
