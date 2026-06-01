@@ -3,6 +3,5 @@ pandas
 numpy
 requests
 plotly
-pytrends
 openai
 python-dateutil
